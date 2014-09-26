@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-type stpClient struct {
+type STPClient struct {
 	// shared
 	mu   sync.Mutex
 	conn net.Conn
@@ -26,17 +26,17 @@ type stpClient struct {
 	bw           *bufio.Writer
 }
 
-func Dial(network, address string) (STPClient, error) {
+func Dial(network, address string) (*STPClient, error) {
 	c, err := net.Dial(network, address)
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
-	return NewConn(c, 0, 0), nil
+	return NewConn(c, address, 0, 0), nil
 }
 
 // DialTimeout acts like Dial but takes timeouts for establishing the
 // connection to the server, writing a command and reading a reply.
-func DialTimeout(network, address string, connectTimeout, readTimeout, writeTimeout time.Duration) (STPClient, error) {
+func DialTimeout(network, address string, connectTimeout, readTimeout, writeTimeout time.Duration) (*STPClient, error) {
 	var c net.Conn
 	var err error
 	if connectTimeout > 0 {
@@ -47,12 +47,13 @@ func DialTimeout(network, address string, connectTimeout, readTimeout, writeTime
 	if err != nil {
 		return nil, err
 	}
-	return NewConn(c, readTimeout, writeTimeout), nil
+	return NewConn(c, address, readTimeout, writeTimeout), nil
 }
 
-func NewConn(netConn net.Conn, readTimeout, writeTimeout time.Duration) STPClient {
-	return &stpClient{
+func NewConn(netConn net.Conn, address string, readTimeout, writeTimeout time.Duration) *STPClient {
+	return &STPClient{
 		conn:         netConn,
+		address:      address,
 		bw:           bufio.NewWriter(netConn),
 		br:           bufio.NewReader(netConn),
 		readTimeout:  readTimeout,
@@ -60,7 +61,7 @@ func NewConn(netConn net.Conn, readTimeout, writeTimeout time.Duration) STPClien
 	}
 }
 
-func (c *stpClient) Close() error {
+func (c *STPClient) Close() error {
 	c.mu.Lock()
 	err := c.err
 	if c.err == nil {
@@ -71,7 +72,7 @@ func (c *stpClient) Close() error {
 	return err
 }
 
-func (c *stpClient) fatal(err error) error {
+func (c *STPClient) fatal(err error) error {
 	c.mu.Lock()
 	if c.err == nil {
 		c.err = err
@@ -83,46 +84,46 @@ func (c *stpClient) fatal(err error) error {
 	return err
 }
 
-func (c *stpClient) Err() error {
+func (c *STPClient) Err() error {
 	c.mu.Lock()
 	err := c.err
 	c.mu.Unlock()
 	return err
 }
 
-func (c *stpClient) String() string {
-	return fmt.Sprintf("stpClient<address=%s>", c.address)
+func (c *STPClient) String() string {
+	return fmt.Sprintf("STPClient<address=%s>", c.address)
 }
 
-func (c *stpClient) writeString(s string) error {
+func (c *STPClient) writeString(s string) error {
 	_, err := c.bw.WriteString(s)
 	return err
 }
 
-func (c *stpClient) writeBytes(p []byte) error {
+func (c *STPClient) writeBytes(p []byte) error {
 	_, err := c.bw.Write(p)
 	return err
 }
 
-func (c *stpClient) Send(p []byte) error {
+func (c *STPClient) Send(p string) error {
 	if c.writeTimeout != 0 {
 		c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
 	}
-	if err := c.writeBytes(p); err != nil {
+	if err := c.writeString(p); err != nil {
 		return c.fatal(err)
 	}
 	return nil
 }
 
 // Read response from socket
-func (c *stpClient) Receive() (resp []string, err error) {
+func (c *STPClient) Receive() (resp []string, err error) {
 	resp = make([]string, 0, 5)
 	for {
 		length, err := c.readLine()
 		if err != nil {
 			return nil, err
 		}
-		if length == nil {
+		if len(length) == 0 {
 			break
 		}
 		data, err := c.readLine()
@@ -135,8 +136,8 @@ func (c *stpClient) Receive() (resp []string, err error) {
 	return resp, err
 }
 
-func (c *stpClient) readLine() ([]byte, error) {
-	p, err := c.br.ReadSlice('\n')
+func (c *STPClient) readLine() ([]byte, error) {
+	p, err := c.br.ReadBytes('\n')
 	if err == bufio.ErrBufferFull {
 		return nil, errors.New("stpClient: long response line")
 	}
@@ -150,7 +151,7 @@ func (c *stpClient) readLine() ([]byte, error) {
 	return p[:i], nil
 }
 
-func (c *stpClient) Flush() error {
+func (c *STPClient) Flush() error {
 	if c.writeTimeout != 0 {
 		c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
 	}
@@ -160,7 +161,7 @@ func (c *stpClient) Flush() error {
 	return nil
 }
 
-func (c *stpClient) Request(request *STPRequest) ([]string, error) {
+func (c *STPClient) Request(request *STPRequest) ([]string, error) {
 	var err error
 	// send request
 	if request != nil {
@@ -181,5 +182,4 @@ func (c *stpClient) Request(request *STPRequest) ([]string, error) {
 		return nil, c.fatal(e)
 	}
 	return resp, err
-
 }
